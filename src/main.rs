@@ -22,9 +22,17 @@ use std::path::PathBuf;
     author = "xkiri <riz.riz1941@gmail.com>",
     version = "0.1.0",
     about = "🚀 A fast, independent, rootless package manager for any Linux distribution",
-    long_about = "rusty is a modern, standalone package manager designed to run without root privileges on any Linux distro.\nIt installs packages cleanly into ~/.local, seamlessly integrates desktop launchers, and provides zero-friction package management."
+    long_about = "rusty is a modern, standalone package manager designed to run without root privileges on any Linux distro.\nIt installs packages cleanly into ~/.local, seamlessly integrates desktop launchers, and provides paru-style detailed verification."
 )]
 struct Cli {
+    /// Skip all interactive confirmation prompts
+    #[arg(short = 'y', long, global = true)]
+    noconfirm: bool,
+
+    /// Suppress verbose log output and step details
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -106,27 +114,26 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let spinner = ui::create_spinner(&format!("Fetching manifest for '{}'...", package));
+            if !cli.quiet {
+                ui::paru_log(&format!("Resolving package '{}' from registry...", package));
+            }
+
             let manifest = match registry.fetch_manifest(&package).await {
-                Ok(m) => {
-                    spinner.finish_and_clear();
-                    m
-                }
+                Ok(m) => m,
                 Err(e) => {
-                    spinner.finish_and_clear();
                     ui::error(&format!("Could not fetch package '{}': {}", package, e));
                     std::process::exit(1);
                 }
             };
 
-            if let Err(e) = installer.install(&manifest).await {
+            if let Err(e) = installer.install(&manifest, cli.noconfirm, cli.quiet).await {
                 ui::error(&format!("Installation failed: {}", e));
                 std::process::exit(1);
             }
         }
 
         Commands::Remove { package } => {
-            if let Err(e) = installer.remove(&package) {
+            if let Err(e) = installer.remove(&package, cli.noconfirm, cli.quiet) {
                 ui::error(&format!("Removal failed: {}", e));
                 std::process::exit(1);
             }
@@ -139,7 +146,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            ui::header("Installed Packages");
+            ui::paru_log("Installed Packages:");
             for pkg in state.packages.values() {
                 println!(
                     "  {} {} ({})",
@@ -158,55 +165,63 @@ async fn main() -> Result<()> {
         }
 
         Commands::Search { query } => {
-            let spinner = ui::create_spinner(&format!("Searching for '{}'...", query));
+            if !cli.quiet {
+                ui::paru_log(&format!("Searching registry for '{}'...", query));
+            }
             match registry.search(&query).await {
                 Ok(results) => {
-                    spinner.finish_and_clear();
                     if results.is_empty() {
                         ui::info(&format!("No packages found matching '{}'.", query));
                     } else {
-                        ui::header(&format!("Search Results for '{}'", query));
+                        println!();
+                        ui::paru_log(&format!("Search Results ({}):", results.len()));
                         for r in results {
                             println!(
                                 "  {} {}",
                                 r.name.bright_green().bold(),
                                 format!("v{}", r.version).bright_cyan()
                             );
+                            if let Some(author) = r.author {
+                                println!("    Maintainer: {}", author.bright_blue());
+                            }
                             if let Some(desc) = r.description {
-                                println!("    {}", desc);
+                                if !desc.is_empty() {
+                                    println!("    {}", desc);
+                                }
+                            }
+                            if let Some(repo) = r.repo_url {
+                                println!("    Repo: {}", repo.bright_black());
                             }
                         }
                         println!();
                     }
                 }
                 Err(e) => {
-                    spinner.finish_and_clear();
                     ui::error(&format!("Search failed: {}", e));
                 }
             }
         }
 
         Commands::Info { package } => {
-            let spinner = ui::create_spinner(&format!("Fetching info for '{}'...", package));
             match registry.fetch_manifest(&package).await {
                 Ok(m) => {
-                    spinner.finish_and_clear();
-                    ui::header(&format!("Package: {}", m.name()));
-                    println!("  Version:     {}", m.version().bright_cyan());
+                    println!();
+                    ui::paru_log(&format!("Package Information: {}", m.name().bright_green().bold()));
+                    println!("  Version:      {}", m.version().bright_cyan());
                     if let Some(desc) = m.description() {
-                        println!("  Description: {}", desc);
+                        println!("  Description:  {}", desc);
                     }
                     if let Some(author) = m.author() {
-                        println!("  Author:      {}", author);
+                        println!("  Author:       {}", author);
                     }
                     if let Some(license) = m.license() {
-                        println!("  License:     {}", license);
+                        println!("  License:      {}", license);
                     }
                     if let Some(repo) = m.repository() {
-                        println!("  Repository:  {}", repo.bright_blue());
+                        println!("  Repository:   {}", repo.bright_blue());
                     }
                     if let Some(hp) = m.homepage() {
-                        println!("  Homepage:    {}", hp.bright_blue());
+                        println!("  Homepage:     {}", hp.bright_blue());
                     }
                     if !m.dependencies.bins.is_empty() {
                         println!("  Dependencies: {}", m.dependencies.bins.join(", ").bright_yellow());
@@ -214,7 +229,6 @@ async fn main() -> Result<()> {
                     println!();
                 }
                 Err(e) => {
-                    spinner.finish_and_clear();
                     ui::error(&format!("Package info error: {}", e));
                 }
             }
@@ -232,7 +246,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            ui::header("Checking for updates...");
+            ui::paru_log("Checking for updates against registry...");
             for pkg_name in to_update {
                 let current = match state.get(&pkg_name) {
                     Some(p) => p,
@@ -250,7 +264,7 @@ async fn main() -> Result<()> {
                             current.version,
                             manifest.version().bright_green()
                         ));
-                        if let Err(e) = installer.install(&manifest).await {
+                        if let Err(e) = installer.install(&manifest, cli.noconfirm, cli.quiet).await {
                             ui::error(&format!("Failed to update {}: {}", pkg_name, e));
                         }
                     } else {
@@ -269,7 +283,8 @@ async fn main() -> Result<()> {
         }
 
         Commands::Config => {
-            ui::header("rusty Configuration");
+            println!();
+            ui::paru_log("rusty Configuration:");
             println!("  Registry URL: {}", config.registry_url.bright_cyan());
             println!("  Binary Dir:   {}", config.bin_dir.display());
             println!("  Data Dir:     {}", config.data_dir.display());

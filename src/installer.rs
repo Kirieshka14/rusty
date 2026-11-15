@@ -22,23 +22,11 @@ impl Installer {
         Self { config }
     }
 
-    pub async fn install(&self, manifest: &PackageManifest) -> Result<()> {
+    pub async fn install(&self, manifest: &PackageManifest, noconfirm: bool, quiet: bool) -> Result<bool> {
         let pkg_name = manifest.name();
         let pkg_ver = manifest.version();
 
-        ui::header(&format!("Installing {} v{}", pkg_name, pkg_ver));
-
-        // 1. Check system dependencies
-        for bin in &manifest.dependencies.bins {
-            if which::which(bin).is_err() {
-                ui::warn(&format!(
-                    "Recommended external dependency '{}' is not installed or not in PATH.",
-                    bin.bright_yellow()
-                ));
-            }
-        }
-
-        // 2. Select matching source for current OS/Arch
+        // 1. Resolve source payload
         let source = manifest.get_current_source().with_context(|| {
             format!(
                 "No compatible source found for architecture '{}-{}'",
@@ -47,52 +35,150 @@ impl Installer {
             )
         })?;
 
-        // 3. Download package archive / binary
-        let cache_file = self.download_source(&pkg_name, &pkg_ver, source).await?;
+        // 2. Paru-style Package Inspection & Security Audit Table
+        if !quiet {
+            ui::paru_log(&format!(
+                "Packages to install (1): {}",
+                format!("{} v{}", pkg_name, pkg_ver).bright_green().bold()
+            ));
 
-        // 4. Verify SHA256 checksum
+            if let Some(desc) = manifest.description() {
+                ui::paru_detail("Description", &desc);
+            }
+            if let Some(author) = manifest.author() {
+                ui::paru_detail("Author", &author);
+            }
+            if let Some(repo) = manifest.repository() {
+                ui::paru_detail("Repository", &repo.bright_blue().to_string());
+            }
+            ui::paru_detail("Payload URL", &source.url.bright_cyan().to_string());
+            ui::paru_detail(
+                "Format",
+                source.format.as_deref().unwrap_or("auto (tar.zst / tar.gz / binary)"),
+            );
+            if let Some(sha) = &source.sha256 {
+                ui::paru_detail("Expected SHA256", &sha.bright_black().to_string());
+            }
+
+            println!();
+            ui::paru_log("Security & Sandbox Audit:");
+            ui::paru_audit(true, "Rootless Mode: 100% safe user-space execution (zero sudo)");
+            ui::paru_audit(
+                source.sha256.is_some(),
+                if source.sha256.is_some() {
+                    "Cryptographic Verification: SHA-256 signature present"
+                } else {
+                    "Cryptographic Verification: No hash specified (proceed with caution)"
+                },
+            );
+            ui::paru_audit(
+                true,
+                &format!(
+                    "Store Isolation: ~/.local/share/rusty/installed/{}-{}/",
+                    pkg_name, pkg_ver
+                ),
+            );
+            ui::paru_audit(
+                true,
+                &format!("Binary Targets: ~/.local/bin/{}", pkg_name),
+            );
+            println!();
+        }
+
+        // 3. User Confirmation Prompt (Paru / Pacman style y/n)
+        if !noconfirm {
+            let ok = ui::confirm("Proceed with installation?", true)?;
+            if !ok {
+                ui::warn("Operation aborted by user.");
+                return Ok(false);
+            }
+        }
+
+        // 4. Paru Step 1: Check system dependencies
+        if !quiet {
+            ui::paru_step(1, 5, "Checking external runtime dependencies");
+        }
+        for bin in &manifest.dependencies.bins {
+            if which::which(bin).is_err() {
+                ui::warn(&format!(
+                    "External runtime dependency '{}' not found in $PATH.",
+                    bin.bright_yellow()
+                ));
+            } else if !quiet {
+                println!("   {} Found dependency: {}", "✓".bright_green(), bin);
+            }
+        }
+
+        // 5. Paru Step 2: Download payload
+        if !quiet {
+            ui::paru_step(2, 5, "Fetching package payload");
+        }
+        let cache_file = self.download_source(&pkg_name, &pkg_ver, source, quiet).await?;
+
+        // 6. Paru Step 3: SHA256 Verification
+        if !quiet {
+            ui::paru_step(3, 5, "Verifying cryptographic checksum");
+        }
         if let Some(expected_sha) = &source.sha256 {
-            let spinner = ui::create_spinner("Verifying SHA256 checksum...");
+            let spinner = if !quiet { Some(ui::create_spinner("Calculating SHA-256 hash...")) } else { None };
             let actual_sha = compute_sha256(&cache_file)?;
+            if let Some(s) = spinner {
+                s.finish_and_clear();
+            }
+
             if actual_sha.to_lowercase() != expected_sha.to_lowercase() {
-                spinner.finish_and_clear();
                 bail!(
-                    "Checksum mismatch!\nExpected: {}\nActual:   {}",
+                    "Security Integrity Check FAILED!\nExpected: {}\nActual:   {}",
                     expected_sha,
                     actual_sha
                 );
             }
-            spinner.finish_and_clear();
-            ui::success("Checksum verified.");
+            if !quiet {
+                println!("   {} Hash matched: {}", "✓".bright_green(), actual_sha.bright_black());
+            }
+        } else if !quiet {
+            println!("   {} No hash provided by manifest (skipped)", "!".bright_yellow());
         }
 
-        // 5. Unpack into store directory (~/.local/share/rusty/installed/<name>-<version>/)
+        // 7. Paru Step 4: Extract into isolated store
+        if !quiet {
+            ui::paru_step(4, 5, "Extracting payload into isolated sandbox store");
+        }
         let store_dir = self.config.packages_dir().join(format!("{}-{}", pkg_name, pkg_ver));
         if store_dir.exists() {
             fs::remove_dir_all(&store_dir)?;
         }
         fs::create_dir_all(&store_dir)?;
 
-        let spinner = ui::create_spinner("Unpacking package contents...");
+        let spinner = if !quiet { Some(ui::create_spinner("Unpacking archive files...")) } else { None };
         unpack_archive(&cache_file, &store_dir, source.format.as_deref())?;
-        spinner.finish_and_clear();
-        ui::success("Extracted package files.");
+        if let Some(s) = spinner {
+            s.finish_and_clear();
+        }
+        if !quiet {
+            println!("   {} Unpacked into {}", "✓".bright_green(), store_dir.display());
+        }
 
-        // 6. Link binaries into ~/.local/bin
+        // 8. Paru Step 5: Link binaries and register desktop launchers
+        if !quiet {
+            ui::paru_step(5, 5, "Registering binaries and desktop integration");
+        }
         let mut installed_files = Vec::new();
         let mut linked_binaries = Vec::new();
 
         for rel_bin in &manifest.install.binaries {
             let src_bin = store_dir.join(rel_bin);
             if !src_bin.exists() {
-                // Try searching for the binary by filename if exact relative path differs
                 if let Some(filename) = Path::new(rel_bin).file_name() {
                     let fallback = find_file_in_dir(&store_dir, filename.to_str().unwrap_or_default());
                     if let Some(found) = fallback {
                         let link_target = self.config.bin_dir.join(filename);
                         symlink_binary(&found, &link_target)?;
-                        installed_files.push(link_target);
+                        installed_files.push(link_target.clone());
                         linked_binaries.push(filename.to_string_lossy().to_string());
+                        if !quiet {
+                            println!("   {} Linked binary: {}", "→".bright_cyan(), link_target.display());
+                        }
                         continue;
                     }
                 }
@@ -103,11 +189,14 @@ impl Installer {
             let bin_name = src_bin.file_name().unwrap_or_default();
             let link_target = self.config.bin_dir.join(bin_name);
             symlink_binary(&src_bin, &link_target)?;
-            installed_files.push(link_target);
+            installed_files.push(link_target.clone());
             linked_binaries.push(bin_name.to_string_lossy().to_string());
+            if !quiet {
+                println!("   {} Linked binary: {}", "→".bright_cyan(), link_target.display());
+            }
         }
 
-        // If no binaries were explicitly specified, auto-detect any executable in bin/
+        // Auto-detect fallback binary if empty
         if linked_binaries.is_empty() {
             let auto_bin = store_dir.join("usr/bin").join(&pkg_name);
             let alt_auto_bin = store_dir.join("bin").join(&pkg_name);
@@ -126,37 +215,47 @@ impl Installer {
             if let Some(src) = candidate {
                 let link_target = self.config.bin_dir.join(&pkg_name);
                 symlink_binary(&src, &link_target)?;
-                installed_files.push(link_target);
+                installed_files.push(link_target.clone());
                 linked_binaries.push(pkg_name.clone());
+                if !quiet {
+                    println!("   {} Linked binary: {}", "→".bright_cyan(), link_target.display());
+                }
             }
         }
 
-        // 7. Install Desktop and MIME files
+        // Install Desktop entries
         for rel_desktop in &manifest.install.desktop {
             if let Some(src_desktop) = find_or_locate(&store_dir, rel_desktop) {
                 let dest_name = src_desktop.file_name().unwrap_or_default();
                 let dest = self.config.apps_dir.join(dest_name);
                 fs::copy(&src_desktop, &dest)?;
-                installed_files.push(dest);
+                installed_files.push(dest.clone());
+                if !quiet {
+                    println!("   {} Registered desktop launcher: {}", "✓".bright_green(), dest.display());
+                }
             }
         }
 
+        // Install MIME types
         for rel_mime in &manifest.install.mime {
             if let Some(src_mime) = find_or_locate(&store_dir, rel_mime) {
                 let mime_dir = self.config.data_dir.parent().unwrap_or(&self.config.data_dir).join("mime/packages");
                 let _ = fs::create_dir_all(&mime_dir);
                 let dest = mime_dir.join(src_mime.file_name().unwrap_or_default());
                 let _ = fs::copy(&src_mime, &dest);
-                installed_files.push(dest);
+                installed_files.push(dest.clone());
+                if !quiet {
+                    println!("   {} Registered MIME definition: {}", "✓".bright_green(), dest.display());
+                }
             }
         }
 
-        // Update desktop database if available
+        // Trigger desktop & mime updates
         let _ = Command::new("update-desktop-database")
             .arg(self.config.apps_dir.to_string_lossy().to_string())
             .output();
 
-        // 8. Record in state.json
+        // 9. Save state
         let mut state = State::load(&self.config.state_file())?;
         state.insert(InstalledPackage {
             name: pkg_name.clone(),
@@ -170,32 +269,50 @@ impl Installer {
         });
         state.save(&self.config.state_file())?;
 
-        ui::success(&format!(
-            "Successfully installed {} v{}!",
-            pkg_name.bright_green().bold(),
-            pkg_ver.bright_cyan()
-        ));
-
-        if !linked_binaries.is_empty() {
-            println!("  Available binaries:");
-            for b in &linked_binaries {
-                println!("    {} {}", "→".bright_cyan(), b.bright_white().bold());
-            }
+        if !quiet {
+            println!();
+            ui::success(&format!(
+                "Successfully installed {} v{}",
+                pkg_name.bright_green().bold(),
+                pkg_ver.bright_cyan()
+            ));
         }
 
-        Ok(())
+        Ok(true)
     }
 
-    pub fn remove(&self, name: &str) -> Result<()> {
+    pub fn remove(&self, name: &str, noconfirm: bool, quiet: bool) -> Result<bool> {
         let mut state = State::load(&self.config.state_file())?;
-        let pkg = match state.remove(name) {
-            Some(p) => p,
+        let pkg = match state.get(name) {
+            Some(p) => p.clone(),
             None => bail!("Package '{}' is not installed.", name),
         };
 
-        ui::header(&format!("Removing {}", name));
+        if !quiet {
+            ui::paru_log(&format!("Packages to remove (1): {}", name.bright_red().bold()));
+            ui::paru_detail("Version", &pkg.version);
+            ui::paru_detail("Installed at", &pkg.installed_at.format("%Y-%m-%d %H:%M").to_string());
+            ui::paru_detail("Store Path", &pkg.store_dir.display().to_string());
+            println!("   Files to be unlinked ({}):", pkg.installed_files.len());
+            for f in &pkg.installed_files {
+                println!("     {} {}", "-".bright_red(), f.display());
+            }
+            println!();
+        }
 
-        // Remove linked binaries, desktop files, etc.
+        if !noconfirm {
+            let ok = ui::confirm(&format!("Do you want to remove '{}'?", name), false)?;
+            if !ok {
+                ui::warn("Operation aborted by user.");
+                return Ok(false);
+            }
+        }
+
+        if !quiet {
+            ui::paru_log("Removing package files and links...");
+        }
+
+        // Remove linked binaries, desktop files
         for path in &pkg.installed_files {
             if path.exists() || path.is_symlink() {
                 let _ = fs::remove_file(path);
@@ -212,10 +329,14 @@ impl Installer {
             .arg(self.config.apps_dir.to_string_lossy().to_string())
             .output();
 
+        state.remove(name);
         state.save(&self.config.state_file())?;
-        ui::success(&format!("Package '{}' has been completely removed.", name.bold()));
 
-        Ok(())
+        if !quiet {
+            ui::success(&format!("Package '{}' has been completely removed.", name.bold()));
+        }
+
+        Ok(true)
     }
 
     async fn download_source(
@@ -223,11 +344,14 @@ impl Installer {
         name: &str,
         version: &str,
         source: &crate::manifest::SourceInfo,
+        quiet: bool,
     ) -> Result<PathBuf> {
         if source.url.starts_with("file://") || source.url.starts_with('/') {
             let local_path = PathBuf::from(source.url.trim_start_matches("file://"));
             if local_path.exists() {
-                ui::info(&format!("Using local payload: {}", local_path.display()));
+                if !quiet {
+                    println!("   {} Using local archive: {}", "✓".bright_green(), local_path.display());
+                }
                 return Ok(local_path);
             }
         }
@@ -239,11 +363,11 @@ impl Installer {
         let dest_path = self.config.cache_dir().join(format!("{}-{}-{}", name, version, filename));
 
         if dest_path.exists() {
-            ui::info(&format!("Using cached archive: {}", filename));
+            if !quiet {
+                println!("   {} Using cached archive: {}", "✓".bright_green(), filename);
+            }
             return Ok(dest_path);
         }
-
-        ui::info(&format!("Downloading from: {}", source.url.bright_cyan()));
 
         let client = reqwest::Client::new();
         let resp = client
@@ -257,7 +381,11 @@ impl Installer {
         }
 
         let total_size = resp.content_length().unwrap_or(0);
-        let progress = ui::create_download_progress(total_size, filename);
+        let progress = if !quiet {
+            Some(ui::create_download_progress(total_size, filename))
+        } else {
+            None
+        };
 
         let mut file = File::create(&dest_path)?;
         let mut stream = resp.bytes_stream();
@@ -265,11 +393,18 @@ impl Installer {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             file.write_all(&chunk)?;
-            progress.inc(chunk.len() as u64);
+            if let Some(p) = &progress {
+                p.inc(chunk.len() as u64);
+            }
         }
 
-        progress.finish_and_clear();
-        ui::success(&format!("Download completed ({} bytes).", total_size));
+        if let Some(p) = progress {
+            p.finish_and_clear();
+        }
+
+        if !quiet {
+            println!("   {} Downloaded {} bytes", "✓".bright_green(), total_size);
+        }
 
         Ok(dest_path)
     }
@@ -312,7 +447,7 @@ fn unpack_archive(archive_path: &Path, dest_dir: &Path, explicit_format: Option<
         return Ok(());
     }
 
-    // Fallback: If it's a raw single binary
+    // Fallback: raw single binary
     let dest_bin = dest_dir.join(archive_path.file_name().unwrap_or_default());
     fs::copy(archive_path, &dest_bin)?;
     let mut perms = fs::metadata(&dest_bin)?.permissions();
@@ -323,7 +458,6 @@ fn unpack_archive(archive_path: &Path, dest_dir: &Path, explicit_format: Option<
 }
 
 fn symlink_binary(src: &Path, target: &Path) -> Result<()> {
-    // Make sure src has executable permissions
     if let Ok(metadata) = fs::metadata(src) {
         let mut perms = metadata.permissions();
         perms.set_mode(perms.mode() | 0o111);

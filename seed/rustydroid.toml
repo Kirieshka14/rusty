@@ -8,7 +8,7 @@ homepage = "https://github.com/Kirieshka14/rustydroid"
 repository = "https://github.com/Kirieshka14/rustydroid"
 
 [sources.x86_64-linux]
-url = "https://github.com/Kirieshka14/rustydroid/releases/download/v0.1.0/rustydroid-0.1.0-1-x86_64.pkg.tar.zst"
+url = "file:///home/kiri/.gemini/antigravity/scratch/rustydroid/packaging/rustydroid-0.1.0-1-x86_64.pkg.tar.zst"
 sha256 = "b1aad0141a12c1aaff94c84ab3113aa834f07aa481c7a17a66a5380b53ba0c91"
 format = "tar.zst"
 
