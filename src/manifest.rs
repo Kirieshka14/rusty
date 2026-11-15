@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageManifest {
+pub struct PackageMeta {
     pub name: String,
     pub version: String,
     pub description: Option<String>,
@@ -10,6 +10,22 @@ pub struct PackageManifest {
     pub license: Option<String>,
     pub homepage: Option<String>,
     pub repository: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageManifest {
+    #[serde(default)]
+    pub package: Option<PackageMeta>,
+
+    // Flat fallbacks (for JSON API or flat manifests)
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub author: Option<String>,
+    pub license: Option<String>,
+    pub homepage: Option<String>,
+    pub repository: Option<String>,
+
     #[serde(default)]
     pub sources: HashMap<String, SourceInfo>,
     #[serde(default)]
@@ -46,9 +62,46 @@ pub struct Dependencies {
 }
 
 impl PackageManifest {
+    pub fn name(&self) -> String {
+        self.package.as_ref().map(|p| p.name.clone())
+            .or_else(|| self.name.clone())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    pub fn version(&self) -> String {
+        self.package.as_ref().map(|p| p.version.clone())
+            .or_else(|| self.version.clone())
+            .unwrap_or_else(|| "0.0.0".to_string())
+    }
+
+    pub fn description(&self) -> Option<String> {
+        self.package.as_ref().and_then(|p| p.description.clone())
+            .or_else(|| self.description.clone())
+    }
+
+    pub fn author(&self) -> Option<String> {
+        self.package.as_ref().and_then(|p| p.author.clone())
+            .or_else(|| self.author.clone())
+    }
+
+    pub fn license(&self) -> Option<String> {
+        self.package.as_ref().and_then(|p| p.license.clone())
+            .or_else(|| self.license.clone())
+    }
+
+    pub fn homepage(&self) -> Option<String> {
+        self.package.as_ref().and_then(|p| p.homepage.clone())
+            .or_else(|| self.homepage.clone())
+    }
+
+    pub fn repository(&self) -> Option<String> {
+        self.package.as_ref().and_then(|p| p.repository.clone())
+            .or_else(|| self.repository.clone())
+    }
+
     pub fn get_current_source(&self) -> Option<&SourceInfo> {
-        let arch = std::env::consts::ARCH; // e.g. "x86_64", "aarch64"
-        let os = std::env::consts::OS;     // e.g. "linux"
+        let arch = std::env::consts::ARCH;
+        let os = std::env::consts::OS;
 
         let keys_to_try = [
             format!("{}-{}", arch, os),
@@ -63,7 +116,6 @@ impl PackageManifest {
             }
         }
 
-        // Fallback: if only 1 source exists, use it
         if self.sources.len() == 1 {
             return self.sources.values().next();
         }

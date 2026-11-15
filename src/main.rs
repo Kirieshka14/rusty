@@ -191,21 +191,21 @@ async fn main() -> Result<()> {
             match registry.fetch_manifest(&package).await {
                 Ok(m) => {
                     spinner.finish_and_clear();
-                    ui::header(&format!("Package: {}", m.name));
-                    println!("  Version:     {}", m.version.bright_cyan());
-                    if let Some(desc) = &m.description {
+                    ui::header(&format!("Package: {}", m.name()));
+                    println!("  Version:     {}", m.version().bright_cyan());
+                    if let Some(desc) = m.description() {
                         println!("  Description: {}", desc);
                     }
-                    if let Some(author) = &m.author {
+                    if let Some(author) = m.author() {
                         println!("  Author:      {}", author);
                     }
-                    if let Some(license) = &m.license {
+                    if let Some(license) = m.license() {
                         println!("  License:     {}", license);
                     }
-                    if let Some(repo) = &m.repository {
+                    if let Some(repo) = m.repository() {
                         println!("  Repository:  {}", repo.bright_blue());
                     }
-                    if let Some(hp) = &m.homepage {
+                    if let Some(hp) = m.homepage() {
                         println!("  Homepage:    {}", hp.bright_blue());
                     }
                     if !m.dependencies.bins.is_empty() {
@@ -243,12 +243,12 @@ async fn main() -> Result<()> {
                 };
 
                 if let Ok(manifest) = registry.fetch_manifest(&pkg_name).await {
-                    if manifest.version != current.version {
+                    if manifest.version() != current.version {
                         ui::info(&format!(
                             "Updating {} from v{} to v{}...",
                             pkg_name.bold(),
                             current.version,
-                            manifest.version.bright_green()
+                            manifest.version().bright_green()
                         ));
                         if let Err(e) = installer.install(&manifest).await {
                             ui::error(&format!("Failed to update {}: {}", pkg_name, e));

@@ -23,7 +23,10 @@ impl Installer {
     }
 
     pub async fn install(&self, manifest: &PackageManifest) -> Result<()> {
-        ui::header(&format!("Installing {} v{}", manifest.name, manifest.version));
+        let pkg_name = manifest.name();
+        let pkg_ver = manifest.version();
+
+        ui::header(&format!("Installing {} v{}", pkg_name, pkg_ver));
 
         // 1. Check system dependencies
         for bin in &manifest.dependencies.bins {
@@ -45,7 +48,7 @@ impl Installer {
         })?;
 
         // 3. Download package archive / binary
-        let cache_file = self.download_source(&manifest.name, &manifest.version, source).await?;
+        let cache_file = self.download_source(&pkg_name, &pkg_ver, source).await?;
 
         // 4. Verify SHA256 checksum
         if let Some(expected_sha) = &source.sha256 {
@@ -64,7 +67,7 @@ impl Installer {
         }
 
         // 5. Unpack into store directory (~/.local/share/rusty/installed/<name>-<version>/)
-        let store_dir = self.config.packages_dir().join(format!("{}-{}", manifest.name, manifest.version));
+        let store_dir = self.config.packages_dir().join(format!("{}-{}", pkg_name, pkg_ver));
         if store_dir.exists() {
             fs::remove_dir_all(&store_dir)?;
         }
@@ -106,9 +109,9 @@ impl Installer {
 
         // If no binaries were explicitly specified, auto-detect any executable in bin/
         if linked_binaries.is_empty() {
-            let auto_bin = store_dir.join("usr/bin").join(&manifest.name);
-            let alt_auto_bin = store_dir.join("bin").join(&manifest.name);
-            let root_bin = store_dir.join(&manifest.name);
+            let auto_bin = store_dir.join("usr/bin").join(&pkg_name);
+            let alt_auto_bin = store_dir.join("bin").join(&pkg_name);
+            let root_bin = store_dir.join(&pkg_name);
 
             let candidate = if auto_bin.exists() {
                 Some(auto_bin)
@@ -121,10 +124,10 @@ impl Installer {
             };
 
             if let Some(src) = candidate {
-                let link_target = self.config.bin_dir.join(&manifest.name);
+                let link_target = self.config.bin_dir.join(&pkg_name);
                 symlink_binary(&src, &link_target)?;
                 installed_files.push(link_target);
-                linked_binaries.push(manifest.name.clone());
+                linked_binaries.push(pkg_name.clone());
             }
         }
 
@@ -156,9 +159,9 @@ impl Installer {
         // 8. Record in state.json
         let mut state = State::load(&self.config.state_file())?;
         state.insert(InstalledPackage {
-            name: manifest.name.clone(),
-            version: manifest.version.clone(),
-            description: manifest.description.clone(),
+            name: pkg_name.clone(),
+            version: pkg_ver.clone(),
+            description: manifest.description(),
             installed_at: Utc::now(),
             source_url: Some(source.url.clone()),
             store_dir,
@@ -169,8 +172,8 @@ impl Installer {
 
         ui::success(&format!(
             "Successfully installed {} v{}!",
-            manifest.name.bright_green().bold(),
-            manifest.version.bright_cyan()
+            pkg_name.bright_green().bold(),
+            pkg_ver.bright_cyan()
         ));
 
         if !linked_binaries.is_empty() {

@@ -20,10 +20,10 @@ impl Packer {
 
         let arch = std::env::consts::ARCH;
         let os = std::env::consts::OS;
-        let archive_name = format!("{}-{}-{}-{}.tar.zst", manifest.name, manifest.version, arch, os);
+        let archive_name = format!("{}-{}-{}-{}.tar.zst", manifest.name(), manifest.version(), arch, os);
         let archive_path = output_dir.join(&archive_name);
 
-        ui::header(&format!("Packaging {} v{}", manifest.name, manifest.version));
+        ui::header(&format!("Packaging {} v{}", manifest.name(), manifest.version()));
 
         let file = File::create(&archive_path)?;
         let encoder = zstd::stream::write::Encoder::new(file, 9)?.auto_finish();
