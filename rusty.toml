@@ -1,0 +1,11 @@
+[package]
+name = "rusty"
+version = "0.1.0"
+description = "A fast, independent, rootless package manager for any Linux distribution"
+author = "xkiri <riz.riz1941@gmail.com>"
+license = "MIT"
+homepage = "https://github.com/Kirieshka14/rusty"
+repository = "https://github.com/Kirieshka14/rusty"
+
+[install]
+binaries = ["target/release/rusty"]
