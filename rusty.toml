@@ -7,5 +7,10 @@ license = "MIT"
 homepage = "https://github.com/Kirieshka14/rusty"
 repository = "https://github.com/Kirieshka14/rusty"
 
+[sources.x86_64-linux]
+url = "file:///home/kiri/Хранилище/Проекты/rusty/dist/rusty-0.1.0-x86_64-linux.tar.zst"
+sha256 = "08fc6441b673d1f17243291fdace0830f24253fb3851bac65bdb0b8d1b70fef5"
+format = "tar.zst"
+
 [install]
 binaries = ["target/release/rusty"]

@@ -224,6 +224,14 @@ impl Installer {
         version: &str,
         source: &crate::manifest::SourceInfo,
     ) -> Result<PathBuf> {
+        if source.url.starts_with("file://") || source.url.starts_with('/') {
+            let local_path = PathBuf::from(source.url.trim_start_matches("file://"));
+            if local_path.exists() {
+                ui::info(&format!("Using local payload: {}", local_path.display()));
+                return Ok(local_path);
+            }
+        }
+
         let filename = Path::new(&source.url)
             .file_name()
             .and_then(|n| n.to_str())
