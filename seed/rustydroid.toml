@@ -1,0 +1,21 @@
+[package]
+name = "rustydroid"
+version = "0.1.0"
+description = "Waydroid-based Android APK, XAPK, APKS runner with Hyprland window sync"
+author = "xkiri <riz.riz1941@gmail.com>"
+license = "MIT"
+homepage = "https://github.com/Kirieshka14/rustydroid"
+repository = "https://github.com/Kirieshka14/rustydroid"
+
+[sources.x86_64-linux]
+url = "https://github.com/Kirieshka14/rustydroid/releases/download/v0.1.0/rustydroid-0.1.0-1-x86_64.pkg.tar.zst"
+sha256 = "b1aad0141a12c1aaff94c84ab3113aa834f07aa481c7a17a66a5380b53ba0c91"
+format = "tar.zst"
+
+[install]
+binaries = ["usr/bin/rustydroid"]
+desktop = ["usr/share/applications/rustydroid.desktop"]
+mime = ["usr/share/mime/packages/rustydroid-android-bundles.xml"]
+
+[dependencies]
+bins = ["waydroid", "adb"]
